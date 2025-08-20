@@ -1,13 +1,15 @@
 import streamlit as st
+import os
+import glob
+import pickle
+import time
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
-import os
-import glob
-import pickle
+from openai.error import RateLimitError
 
 st.set_page_config(page_title="Document QA Chatbot")
 st.title("📚 Ask Questions")
@@ -15,7 +17,6 @@ st.title("📚 Ask Questions")
 openai_api_key = st.text_input("Enter your OpenAI API Key", type="password")
 if not openai_api_key:
     st.stop()
-
 os.environ["OPENAI_API_KEY"] = openai_api_key
 
 def load_documents():
@@ -31,8 +32,28 @@ def load_documents():
         docs.extend(loader.load())
     return docs
 
+def embed_documents_with_retry(embedding, texts, batch_size=10, max_retries=5):
+    all_embeddings = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        retries = 0
+        while True:
+            try:
+                emb = embedding.embed_documents(batch)
+                all_embeddings.extend(emb)
+                break
+            except RateLimitError:
+                if retries >= max_retries:
+                    st.error("Max retries reached for embedding calls.")
+                    raise
+                wait_time = 2 ** retries  # exponential backoff
+                st.warning(f"Rate limit hit, retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+                retries += 1
+    return all_embeddings
+
 def create_or_load_vectorstore():
-    if os.path.exists("faiss_index.pkl") and os.path.exists("faiss_index.pkl.metadatas"):
+    if os.path.exists("faiss_index.pkl"):
         with open("faiss_index.pkl", "rb") as f:
             vectordb = pickle.load(f)
         return vectordb
@@ -42,11 +63,19 @@ def create_or_load_vectorstore():
         split_docs = splitter.split_documents(documents)
 
         embeddings = OpenAIEmbeddings()
-        vectordb = FAISS.from_documents(split_docs, embeddings)
 
+        # Prepare texts for embeddings
+        texts = [doc.page_content for doc in split_docs]
+
+        # Use custom batch embed with retry
+        all_embs = embed_documents_with_retry(embeddings, texts)
+
+        # Manually create FAISS vectorstore (from_texts expects texts + embeddings)
+        vectordb = FAISS.from_texts(texts, embeddings, metadatas=[doc.metadata for doc in split_docs])
+
+        # Save to disk
         with open("faiss_index.pkl", "wb") as f:
             pickle.dump(vectordb, f)
-
         return vectordb
 
 with st.spinner("Loading or creating vectorstore..."):
