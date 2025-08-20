@@ -30,24 +30,27 @@ def load_documents():
         docs.extend(loader.load())
     return docs
 
-with st.spinner("Loading documents..."):
-    documents = load_documents()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    split_docs = splitter.split_documents(documents)
+embeddings = OpenAIEmbeddings()
+index_path = "faiss_index"
 
-    embeddings = OpenAIEmbeddings()
-    index_path = "faiss_index"
-
-    if os.path.exists(index_path):
-        vectordb = FAISS.load_local(index_path, embeddings)
+if os.path.exists(index_path):
+    vectordb = FAISS.load_local(index_path, embeddings)
+else:
+    st.warning("FAISS index not found. Please build the index by clicking the button below.")
+    if st.button("Build FAISS Index"):
+        with st.spinner("Building FAISS index. This may take a while..."):
+            documents = load_documents()
+            splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+            split_docs = splitter.split_documents(documents)
+            vectordb = FAISS.from_documents(split_docs, embeddings)
+            vectordb.save_local(index_path)
+            st.success("Index built successfully! Please rerun the app.")
+        st.stop()
     else:
-        vectordb = FAISS.from_documents(split_docs, embeddings)
-        vectordb.save_local(index_path)
+        st.stop()
 
-    retriever = vectordb.as_retriever()
-    qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(), retriever=retriever)
-
-st.success("✅ Documents loaded!")
+retriever = vectordb.as_retriever()
+qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(), retriever=retriever)
 
 query = st.text_input("Ask a question:")
 if query:
