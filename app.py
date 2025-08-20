@@ -7,6 +7,7 @@ from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
 import os
 import glob
+import pickle
 
 st.set_page_config(page_title="Document QA Chatbot")
 st.title("📚 Ask Questions")
@@ -30,20 +31,34 @@ def load_documents():
         docs.extend(loader.load())
     return docs
 
-with st.spinner("Loading documents..."):
-    documents = load_documents()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    split_docs = splitter.split_documents(documents)
+def create_or_load_vectorstore():
+    if os.path.exists("faiss_index.pkl") and os.path.exists("faiss_index.pkl.metadatas"):
+        with open("faiss_index.pkl", "rb") as f:
+            vectordb = pickle.load(f)
+        return vectordb
+    else:
+        documents = load_documents()
+        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+        split_docs = splitter.split_documents(documents)
 
-    embeddings = OpenAIEmbeddings()
-    vectordb = FAISS.from_documents(split_docs, embeddings)
+        embeddings = OpenAIEmbeddings()
+        vectordb = FAISS.from_documents(split_docs, embeddings)
 
-    retriever = vectordb.as_retriever()
-    qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(), retriever=retriever)
+        with open("faiss_index.pkl", "wb") as f:
+            pickle.dump(vectordb, f)
 
-st.success("✅ Documents loaded!")
+        return vectordb
+
+with st.spinner("Loading or creating vectorstore..."):
+    vectordb = create_or_load_vectorstore()
+
+retriever = vectordb.as_retriever()
+qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(), retriever=retriever)
+
+st.success("✅ Ready to answer questions!")
 
 query = st.text_input("Ask a question:")
 if query:
-    result = qa_chain.run(query)
+    with st.spinner("Thinking..."):
+        result = qa_chain.run(query)
     st.write("🤖", result)
