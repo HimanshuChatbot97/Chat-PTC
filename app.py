@@ -1,6 +1,6 @@
 import streamlit as st
-from langchain.vectorstores import FAISS
-from langchain.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores.faiss import FAISS
+from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
