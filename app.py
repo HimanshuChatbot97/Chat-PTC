@@ -5,25 +5,27 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
+from openai import OpenAIError
 import os
 import glob
 import time
 
 st.set_page_config(page_title="Document QA Chatbot")
-st.title("📚 Ask Questions from Your Documents")
+st.title("📚 Ask Questions from your Docs")
 
-# Step 1: API key input
-openai_api_key = st.text_input("Enter your OpenAI API Key", type="password")
+openai_api_key = st.text_input("🔑 Enter your OpenAI API Key", type="password")
 if not openai_api_key:
     st.stop()
 
 os.environ["OPENAI_API_KEY"] = openai_api_key
 
-# Step 2: Load documents from /docs folder
-def load_documents():
+@st.cache_data(show_spinner=False)
+def load_documents(limit=3):
     docs = []
     files = glob.glob("docs/*")
-    for file_path in files:
+    for i, file_path in enumerate(files):
+        if i >= limit:  # To avoid exceeding token limits
+            break
         if file_path.endswith(".pdf"):
             loader = PyPDFLoader(file_path)
         elif file_path.endswith(".txt"):
@@ -33,55 +35,55 @@ def load_documents():
         docs.extend(loader.load())
     return docs
 
-# Step 3: Retry wrapper for embeddings to avoid rate limits
-def embed_documents_with_retry(embedding, texts, batch_size=10, max_retries=5):
-    all_embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        retries = 0
-        while retries <= max_retries:
+def create_embeddings_with_backoff(texts, embedding_model):
+    """Embed texts with exponential backoff to avoid hitting rate limits."""
+    results = []
+    for i, text in enumerate(texts):
+        retry = 0
+        while retry < 5:
             try:
-                emb = embedding.embed_documents(batch)
-                all_embeddings.extend(emb)
+                result = embedding_model.embed_documents([text])
+                results.extend(result)
                 break
-            except Exception as e:
-                wait_time = 2 ** retries
-                st.warning(f"Rate limit or API error. Retrying in {wait_time}s... ({e})")
-                time.sleep(wait_time)
-                retries += 1
-        else:
-            st.error("Embedding failed after multiple retries.")
-            raise RuntimeError("Embedding failed.")
-    return all_embeddings
+            except OpenAIError as e:
+                if 'rate_limit' in str(e).lower() or '429' in str(e).lower():
+                    wait_time = 2 ** retry
+                    st.warning(f"⚠️ Rate limit hit. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    retry += 1
+                else:
+                    st.error(f"❌ Embedding failed: {e}")
+                    break
+    return results
 
-# Step 4: Create or load FAISS vectorstore
-def create_or_load_vectorstore(docs, embeddings):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    split_docs = splitter.split_documents(docs)
-
-    texts = [doc.page_content for doc in split_docs]
-    metadatas = [doc.metadata for doc in split_docs]
-    vectors = embed_documents_with_retry(embeddings, texts)
-    vectordb = FAISS.from_embeddings(vectors, texts, metadatas=metadatas)
-    return vectordb
-
-# Step 5: Run everything
-with st.spinner("Loading documents and preparing vectorstore..."):
-    documents = load_documents()
+with st.spinner("🧠 Processing documents..."):
+    documents = load_documents(limit=3)
     if not documents:
-        st.error("No valid PDF or TXT documents found in the `docs` folder.")
+        st.error("No valid documents found in `docs/` folder.")
         st.stop()
 
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    split_docs = splitter.split_documents(documents)
+
     embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
-    vectordb = create_or_load_vectorstore(documents, embeddings)
+
+    # Use retry mechanism
+    try:
+        vectordb = FAISS.from_documents(split_docs, embeddings)
+    except OpenAIError as e:
+        st.error(f"❌ Failed to create vectorstore due to OpenAI error: {e}")
+        st.stop()
 
     retriever = vectordb.as_retriever()
-    qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(api_key=openai_api_key), retriever=retriever)
+    qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(openai_api_key=openai_api_key), retriever=retriever)
 
-st.success("✅ Documents loaded and ready!")
+st.success("✅ Ready! Ask your questions below.")
 
-# Step 6: Ask questions
-query = st.text_input("Ask a question:")
+query = st.text_input("💬 Ask a question:")
 if query:
-    result = qa_chain.run(query)
-    st.write("🤖", result)
+    with st.spinner("🤖 Thinking..."):
+        try:
+            result = qa_chain.run(query)
+            st.write("🤖", result)
+        except OpenAIError as e:
+            st.error(f"OpenAI error during QA: {e}")
