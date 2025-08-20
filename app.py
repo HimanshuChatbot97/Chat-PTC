@@ -9,7 +9,6 @@ from langchain.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
-from openai.error import OpenAIError
 
 st.set_page_config(page_title="Document QA Chatbot")
 st.title("📚 Ask Questions")
@@ -34,7 +33,7 @@ def load_documents():
 
 def embed_documents_with_retry(embedding, texts, batch_size=10, max_retries=5):
     all_embeddings = []
-    for i in range(0, len(texts), batch_size):  # <-- fixed 'rang' -> 'range' and added ':'
+    for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
         retries = 0
         while True:
@@ -42,12 +41,12 @@ def embed_documents_with_retry(embedding, texts, batch_size=10, max_retries=5):
                 emb = embedding.embed_documents(batch)
                 all_embeddings.extend(emb)
                 break
-            except OpenAIError as e:
+            except Exception as e:  # catch all exceptions here
                 if retries >= max_retries:
                     st.error("Max retries reached for embedding calls.")
                     raise
                 wait_time = 2 ** retries
-                st.warning(f"OpenAI API error, retrying in {wait_time} seconds... ({e})")
+                st.warning(f"API error, retrying in {wait_time} seconds... ({e})")
                 time.sleep(wait_time)
                 retries += 1
     return all_embeddings
@@ -74,16 +73,4 @@ def create_or_load_vectorstore():
             pickle.dump(vectordb, f)
         return vectordb
 
-with st.spinner("Loading or creating vectorstore..."):
-    vectordb = create_or_load_vectorstore()
-
-retriever = vectordb.as_retriever()
-qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(), retriever=retriever)
-
-st.success("✅ Ready to answer questions!")
-
-query = st.text_input("Ask a question:")
-if query:
-    with st.spinner("Thinking..."):
-        result = qa_chain.run(query)
-    st.write("🤖", result)
+with st.spinner("Loading or creating vec
