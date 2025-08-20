@@ -9,7 +9,7 @@ from langchain.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
-from openai.error import RateLimitError
+from openai.error import OpenAIError  # changed here
 
 st.set_page_config(page_title="Document QA Chatbot")
 st.title("📚 Ask Questions")
@@ -34,60 +34,4 @@ def load_documents():
 
 def embed_documents_with_retry(embedding, texts, batch_size=10, max_retries=5):
     all_embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        retries = 0
-        while True:
-            try:
-                emb = embedding.embed_documents(batch)
-                all_embeddings.extend(emb)
-                break
-            except RateLimitError:
-                if retries >= max_retries:
-                    st.error("Max retries reached for embedding calls.")
-                    raise
-                wait_time = 2 ** retries  # exponential backoff
-                st.warning(f"Rate limit hit, retrying in {wait_time} seconds...")
-                time.sleep(wait_time)
-                retries += 1
-    return all_embeddings
-
-def create_or_load_vectorstore():
-    if os.path.exists("faiss_index.pkl"):
-        with open("faiss_index.pkl", "rb") as f:
-            vectordb = pickle.load(f)
-        return vectordb
-    else:
-        documents = load_documents()
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-        split_docs = splitter.split_documents(documents)
-
-        embeddings = OpenAIEmbeddings()
-
-        # Prepare texts for embeddings
-        texts = [doc.page_content for doc in split_docs]
-
-        # Use custom batch embed with retry
-        all_embs = embed_documents_with_retry(embeddings, texts)
-
-        # Manually create FAISS vectorstore (from_texts expects texts + embeddings)
-        vectordb = FAISS.from_texts(texts, embeddings, metadatas=[doc.metadata for doc in split_docs])
-
-        # Save to disk
-        with open("faiss_index.pkl", "wb") as f:
-            pickle.dump(vectordb, f)
-        return vectordb
-
-with st.spinner("Loading or creating vectorstore..."):
-    vectordb = create_or_load_vectorstore()
-
-retriever = vectordb.as_retriever()
-qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(), retriever=retriever)
-
-st.success("✅ Ready to answer questions!")
-
-query = st.text_input("Ask a question:")
-if query:
-    with st.spinner("Thinking..."):
-        result = qa_chain.run(query)
-    st.write("🤖", result)
+    for i in rang
