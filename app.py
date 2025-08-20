@@ -1,93 +1,87 @@
 import streamlit as st
-import os
-import glob
-import pickle
-import time
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.embeddings import OpenAIEmbeddings
-from langchain.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
+import os
+import glob
+import time
 
 st.set_page_config(page_title="Document QA Chatbot")
-st.title("📚 Ask Questions")
+st.title("📚 Ask Questions from Your Documents")
 
+# Step 1: API key input
 openai_api_key = st.text_input("Enter your OpenAI API Key", type="password")
 if not openai_api_key:
     st.stop()
 
-if st.button("Load Documents and Initialize"):
-    os.environ["OPENAI_API_KEY"] = openai_api_key
+os.environ["OPENAI_API_KEY"] = openai_api_key
 
-    def load_documents():
-        docs = []
-        files = glob.glob("docs/*")
-        for file_path in files:
-            if file_path.endswith(".pdf"):
-                loader = PyPDFLoader(file_path)
-            elif file_path.endswith(".txt"):
-                loader = TextLoader(file_path)
-            else:
-                continue
-            docs.extend(loader.load())
-        return docs
-
-    def embed_documents_with_retry(embedding, texts, batch_size=10, max_retries=5):
-        all_embeddings = []
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            retries = 0
-            while True:
-                try:
-                    emb = embedding.embed_documents(batch)
-                    all_embeddings.extend(emb)
-                    break
-                except Exception as e:
-                    if retries >= max_retries:
-                        st.error("Max retries reached for embedding calls.")
-                        raise
-                    wait_time = 2 ** retries
-                    st.warning(f"API error, retrying in {wait_time} seconds... ({e})")
-                    time.sleep(wait_time)
-                    retries += 1
-        return all_embeddings
-
-    def create_or_load_vectorstore():
-        if os.path.exists("faiss_index.pkl"):
-            with open("faiss_index.pkl", "rb") as f:
-                vectordb = pickle.load(f)
-            return vectordb
+# Step 2: Load documents from /docs folder
+def load_documents():
+    docs = []
+    files = glob.glob("docs/*")
+    for file_path in files:
+        if file_path.endswith(".pdf"):
+            loader = PyPDFLoader(file_path)
+        elif file_path.endswith(".txt"):
+            loader = TextLoader(file_path)
         else:
-            documents = load_documents()
-            splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-            split_docs = splitter.split_documents(documents)
+            continue
+        docs.extend(loader.load())
+    return docs
 
-            embeddings = OpenAIEmbeddings()
+# Step 3: Retry wrapper for embeddings to avoid rate limits
+def embed_documents_with_retry(embedding, texts, batch_size=10, max_retries=5):
+    all_embeddings = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        retries = 0
+        while retries <= max_retries:
+            try:
+                emb = embedding.embed_documents(batch)
+                all_embeddings.extend(emb)
+                break
+            except Exception as e:
+                wait_time = 2 ** retries
+                st.warning(f"Rate limit or API error. Retrying in {wait_time}s... ({e})")
+                time.sleep(wait_time)
+                retries += 1
+        else:
+            st.error("Embedding failed after multiple retries.")
+            raise RuntimeError("Embedding failed.")
+    return all_embeddings
 
-            texts = [doc.page_content for doc in split_docs]
+# Step 4: Create or load FAISS vectorstore
+def create_or_load_vectorstore(docs, embeddings):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    split_docs = splitter.split_documents(docs)
 
-            # embedding with retry
-            all_embs = embed_documents_with_retry(embeddings, texts)
+    texts = [doc.page_content for doc in split_docs]
+    metadatas = [doc.metadata for doc in split_docs]
+    vectors = embed_documents_with_retry(embeddings, texts)
+    vectordb = FAISS.from_embeddings(vectors, texts, metadatas=metadatas)
+    return vectordb
 
-            vectordb = FAISS.from_texts(texts, embeddings, metadatas=[doc.metadata for doc in split_docs])
+# Step 5: Run everything
+with st.spinner("Loading documents and preparing vectorstore..."):
+    documents = load_documents()
+    if not documents:
+        st.error("No valid PDF or TXT documents found in the `docs` folder.")
+        st.stop()
 
-            with open("faiss_index.pkl", "wb") as f:
-                pickle.dump(vectordb, f)
-            return vectordb
-
-    with st.spinner("Loading or creating vectorstore..."):
-        vectordb = create_or_load_vectorstore()
+    embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+    vectordb = create_or_load_vectorstore(documents, embeddings)
 
     retriever = vectordb.as_retriever()
-    qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(), retriever=retriever)
+    qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(api_key=openai_api_key), retriever=retriever)
 
-    st.session_state["qa_chain"] = qa_chain
-    st.success("✅ Ready to answer questions!")
+st.success("✅ Documents loaded and ready!")
 
-if "qa_chain" in st.session_state:
-    query = st.text_input("Ask a question:")
-    if query:
-        with st.spinner("Thinking..."):
-            result = st.session_state.qa_chain.run(query)
-        st.write("🤖", result)
+# Step 6: Ask questions
+query = st.text_input("Ask a question:")
+if query:
+    result = qa_chain.run(query)
+    st.write("🤖", result)
