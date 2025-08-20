@@ -1,12 +1,12 @@
 import streamlit as st
+import os
+import glob
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
-import os
-import glob
 
 st.set_page_config(page_title="Document QA Chatbot")
 st.title("📚 Ask Questions")
@@ -36,7 +36,13 @@ with st.spinner("Loading documents..."):
     split_docs = splitter.split_documents(documents)
 
     embeddings = OpenAIEmbeddings()
-    vectordb = FAISS.from_documents(split_docs, embeddings)
+    index_path = "faiss_index"
+
+    if os.path.exists(index_path):
+        vectordb = FAISS.load_local(index_path, embeddings)
+    else:
+        vectordb = FAISS.from_documents(split_docs, embeddings)
+        vectordb.save_local(index_path)
 
     retriever = vectordb.as_retriever()
     qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(), retriever=retriever)
