@@ -18,8 +18,7 @@ os.environ["OPENAI_API_KEY"] = openai_api_key
 
 def load_documents():
     docs = []
-    files = glob.glob("docs/*")
-    for file_path in files:
+    for file_path in glob.glob("docs/*"):
         if file_path.endswith(".pdf"):
             loader = PyPDFLoader(file_path)
         elif file_path.endswith(".txt"):
@@ -29,20 +28,20 @@ def load_documents():
         docs.extend(loader.load())
     return docs
 
-index_path = "faiss_index"
+index_folder = "faiss_index"
 embeddings = OpenAIEmbeddings()
 
-if os.path.exists(index_path):
-    vectordb = FAISS.load_local(index_path, embeddings)
+if os.path.exists(index_folder):
+    vectordb = FAISS.load_local(index_folder, embeddings)
 else:
-    st.warning("Index not found. Please click the button to build the index.")
+    st.warning("No index found. Please build the FAISS index first.")
     if st.button("Build FAISS Index"):
-        with st.spinner("Building index, this may take some time..."):
+        with st.spinner("Building index. This might take a few minutes..."):
             documents = load_documents()
             splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
             split_docs = splitter.split_documents(documents)
             vectordb = FAISS.from_documents(split_docs, embeddings)
-            vectordb.save_local(index_path)
+            vectordb.save_local(index_folder)
             st.success("Index built! Please rerun the app.")
         st.stop()
     else:
